@@ -6,13 +6,13 @@
 [
     {
         "sid": "1",
-        "utt": "Hello",
-        "dur": [0, 9.2]
+        "text": "Hello",
+        "time": [0, 9.2]
     },
     {
         "sid": "2",
-        "utt": "How are you",
-        "dur": [10.00, 14.23]
+        "text": "How are you",
+        "time": [10.00, 14.23]
     }
 ]
 ```
@@ -22,12 +22,12 @@
 ```json
 [
     {
-        "utt": "Hello",
-        "dur": [0, 9.2]
+        "text": "Hello",
+        "time": [0, 9.2]
     },
     {
-        "utt": "How are you",
-        "dur": [10.00, 14.23]
+        "text": "How are you",
+        "time": [10.00, 14.23]
     }
 ]
 ```
