@@ -95,6 +95,9 @@ def target_to_whisper(w_tokens: list[str], w_sids: list[int], t_speakers: list[s
         t2w.append([sid, (cfst, plst)])
         idx = plst
 
+    if idx < len(w_tokens):
+        t2w.append(['', (idx, len(w_tokens))])
+
     while True:
         for i, curr in enumerate(t2w):
             if i == 0: continue
@@ -139,6 +142,18 @@ def target_to_whisper(w_tokens: list[str], w_sids: list[int], t_speakers: list[s
         t2w = [t for t in t2w if t is not None]
         if p_len == len(t2w): break
 
+    for i, c in enumerate(t2w):
+        if not c[0]:
+            if i + 1 < len(t2w):
+                n = t2w[i + 1]
+                n[1] = (c[1][0], n[1][1])
+            elif i - 1 >= 0:
+                p = t2w[i - 1]
+                p[1] = (p[1][0], c[1][1])
+            t2w[i] = None
+
+    t2w = [t for t in t2w if t is not None]
+
     for curr in t2w:
         t = curr[1]
         curr[1] = '' if t is None else ' '.join(w_tokens[t[0]:t[1]])
@@ -162,6 +177,9 @@ def fuse(whisper_input: str, target_input: str, fuse_output: str, tokenizer: Eng
     a2w = align4d_to_whisper(w_tokens, a_output['hypothesis'])
     t2w = target_to_whisper(w_tokens, w_sids, t_speakers, t2a, a2w)
     json.dump(t2w, open(fuse_output, 'w'), indent=2)
+
+    print(len(w_tokens), sum([len(utt[1].split()) for utt in t2w]))
+    compare(t2w, t_utterances)
     return t2w
 
 
@@ -178,7 +196,7 @@ def compare(t2w: list[list[str]], t_utterances: list[list[str]]):
             all.append('({})'.format(utterance))
             nosid += 1
 
-    fout = open('resources/xprint_5.txt', 'w')
+    fout = open('resources/xprint_6.txt', 'w')
     fout.write('\n'.join(all))
     fout.write('\n\nNo Match: {}, No Speaker: {}\n'.format(empty, nosid))
 
