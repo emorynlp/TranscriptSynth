@@ -27,15 +27,8 @@ DEFAULT_SPEAKER = '0'
 
 
 def whisper_transcript(filepath: str, tokenizer: EnglishTokenizer) -> tuple[list[str], list[int]]:
-    # transcript = json.load(open(filepath))
-    # tokens, sids = [], []
-    #
-    # for sid, utterance in enumerate(transcript):
-    #     t = utterance['text'].split()
-    #     tokens.extend(t)
-    #     sids.extend([sid] * len(t))
     transcript = json.load(open(filepath))
-    text = ' '.join([u['text'] for u in transcript])
+    text = ' '.join([u for u in transcript])
 
     tokens, sids = [], []
     for sid, s in enumerate(tokenizer.decode(text, segment=2)):
@@ -51,8 +44,8 @@ def target_transcript(filepath: str) -> tuple[list[list[str]], list[str]]:
     utterances, speakers = [], []
 
     for utterance in transcript:
-        t = utterance['text'].split()
-        speakers.append(utterance['sid'])
+        t = utterance[1].split()
+        speakers.append(utterance[0])
         # utterances.append([DEFAULT_SPEAKER_ID, t])  # TODO: after updated
         utterances.append([DEFAULT_SPEAKER, ' '.join(t)])
 
@@ -91,16 +84,16 @@ def target_to_whisper(w_tokens: list[str], w_sids: list[int], t_speakers: list[s
 
     for t_idx, t_indices in enumerate(t2a):
         sid = t_speakers[t_idx]
-        fst = next((i for i in t_indices if i >= 0 and i in a2w), -1)
-        if fst == -1:
+        cfst = next((i for i in t_indices if i >= 0 and i in a2w), -1)
+        if cfst == -1:
             t2w.append([sid, None])
             continue
-        lst = next(i for i in reversed(t_indices) if i >= 0 and i in a2w)
-        fst, lst = a2w[fst], a2w[lst] + 1
-        if fst > idx:
-            t2w.append(['', (idx, fst)])
-        t2w.append([sid, (fst, lst)])
-        idx = lst
+        plst = next(i for i in reversed(t_indices) if i >= 0 and i in a2w)
+        cfst, plst = a2w[cfst], a2w[plst] + 1
+        if cfst > idx:
+            t2w.append(['', (idx, cfst)])
+        t2w.append([sid, (cfst, plst)])
+        idx = plst
 
     while True:
         for i, curr in enumerate(t2w):
@@ -113,31 +106,37 @@ def target_to_whisper(w_tokens: list[str], w_sids: list[int], t_speakers: list[s
             if w_sids[p_lst - 1] == w_sids[c_fst]:
                 sid = w_sids[c_fst]
                 # merge unmatched tokens to the next utterance
-                if not p_sid and c_sid:
-                    fst = p_fst
+                if not p_sid:
+                    if c_sid:
+                        curr[1] = (p_fst, c_lst)
+                        t2w[i - 1] = None
+                # merge unmatched tokens to the previous utterance
+                elif not c_sid:
+                    if p_sid:
+                        prev[1] = (p_fst, c_lst)
+                        t2w[i] = None
+                # merge partial segments
+                else:
+                    plst = p_fst
                     for j in range(p_lst - 2, p_fst - 1, -1):
                         if w_sids[j] != sid:
-                            fst = j + 1
+                            plst = j + 1
                             break
-                    curr[1] = (fst, c_lst)
-                    t2w[i - 1] = None
-                # merge unmatched tokens to the previous utterance
-                elif not c_sid and p_sid:
-                    lst = c_lst
+                    cfst = c_lst
                     for j in range(c_fst + 1, c_lst):
                         if w_sids[j] != sid:
-                            lst = j
+                            cfst = j
                             break
-                    prev[1] = (p_fst, lst)
-                    t2w[i] = None
 
-                # print('=======================================================')
-                # print(' '.join(w_tokens[p_fst:p_lst]))
-                # print(' '.join(w_tokens[c_fst:c_lst]))
+                    if p_lst - plst < cfst - c_fst and plst - p_fst > 0:
+                        prev[1] = (p_fst, plst)
+                        curr[1] = (plst, c_lst)
+                    else:
+                        prev[1] = (p_fst, cfst)
+                        curr[1] = (cfst, c_lst)
 
         p_len = len(t2w)
         t2w = [t for t in t2w if t is not None]
-        print(p_len, len(t2w))
         if p_len == len(t2w): break
 
     for curr in t2w:
@@ -147,7 +146,7 @@ def target_to_whisper(w_tokens: list[str], w_sids: list[int], t_speakers: list[s
     return t2w
 
 
-def fuse(whisper_input: str, target_input: str, fuse_output: str, tokenizer: EnglishTokenizer, align_output: Optional[str] = None, xprint: bool = False):
+def fuse(whisper_input: str, target_input: str, fuse_output: str, tokenizer: EnglishTokenizer, align_output: Optional[str] = None) -> list[list[str]]:
     w_tokens, w_sids = whisper_transcript(whisper_input, tokenizer)
     t_utterances, t_speakers = target_transcript(target_input)
 
@@ -163,7 +162,7 @@ def fuse(whisper_input: str, target_input: str, fuse_output: str, tokenizer: Eng
     a2w = align4d_to_whisper(w_tokens, a_output['hypothesis'])
     t2w = target_to_whisper(w_tokens, w_sids, t_speakers, t2a, a2w)
     json.dump(t2w, open(fuse_output, 'w'), indent=2)
-    if xprint: compare(t2w, t_utterances)
+    return t2w
 
 
 def compare(t2w: list[list[str]], t_utterances: list[list[str]]):
@@ -179,9 +178,15 @@ def compare(t2w: list[list[str]], t_utterances: list[list[str]]):
             all.append('({})'.format(utterance))
             nosid += 1
 
-    fout = open('resources/xprint_2.txt', 'w')
+    fout = open('resources/xprint_5.txt', 'w')
     fout.write('\n'.join(all))
     fout.write('\n\nNo Match: {}, No Speaker: {}\n'.format(empty, nosid))
+
+
+def fuse_plain(t2w, plain_output: str):
+    fout = open(plain_output, 'w')
+    for sid, utterance in t2w:
+        fout.write('Speaker {}: {}\n'.format(sid, utterance))
 
 
 if __name__ == '__main__':
@@ -190,4 +195,4 @@ if __name__ == '__main__':
     target_input = 'resources/azure.json'
     fuse_output = 'resources/fuse.json'
     align_output = 'resources/align.json'
-    fuse(whisper_input, target_input, fuse_output, tokenizer, align_output, True)
+    fuse(whisper_input, target_input, fuse_output, tokenizer, align_output)
