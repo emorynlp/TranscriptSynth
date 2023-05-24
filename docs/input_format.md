@@ -4,16 +4,9 @@
 
 ```json
 [
-    {
-        "sid": "1",
-        "text": "Hello",
-        "time": [0, 9.2]
-    },
-    {
-        "sid": "2",
-        "text": "How are you",
-        "time": [10.00, 14.23]
-    }
+  ["1", "Hello"],
+  ["2", "How are you?"],
+  ["1", "I'm fine."]
 ]
 ```
 
@@ -21,13 +14,8 @@
 
 ```json
 [
-    {
-        "text": "Hello",
-        "time": [0, 9.2]
-    },
-    {
-        "text": "How are you",
-        "time": [10.00, 14.23]
-    }
+  ["Hello"],
+  ["How are you?"],
+  ["I'm fine."]
 ]
 ```

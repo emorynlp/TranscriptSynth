@@ -17,33 +17,177 @@
 __author__ = 'Jinho D. Choi'
 
 import json
-from typing import Optional, List, Dict
+import os.path
+from typing import Optional
 
 from align4d import align
+from elit_tokenizer import EnglishTokenizer
+
+DEFAULT_SPEAKER = '0'
 
 
-def alignt():
-    hypothesis = "ok I am a fish. Are you? Hello there. How are you? ok"
-    reference = [
-        ["A", "I am a fish. "],
-        ["B", "okay. "],
-        ["C", "Are you? "],
-        ["D", "Hello there. "],
-        ["E", "How are you? "]
-    ]
-    align_result = align.align(hypothesis, reference)
-    print(align_result)
+def whisper_transcript(filepath: str, tokenizer: EnglishTokenizer) -> tuple[list[str], list[int]]:
+    # transcript = json.load(open(filepath))
+    # tokens, sids = [], []
+    #
+    # for sid, utterance in enumerate(transcript):
+    #     t = utterance['text'].split()
+    #     tokens.extend(t)
+    #     sids.extend([sid] * len(t))
+    transcript = json.load(open(filepath))
+    text = ' '.join([u['text'] for u in transcript])
+
+    tokens, sids = [], []
+    for sid, s in enumerate(tokenizer.decode(text, segment=2)):
+        t = text[s.offsets[0][0]:s.offsets[-1][1]].split()
+        tokens.extend(t)
+        sids.extend([sid] * len(t))
+
+    return tokens, sids
 
 
-def fuse(source: List[Dict], target: List[Dict]):
-    """
-    :param source: the list of utterances without speaker information.
-    :param target: the list of utterances with speaker information.
-    :return:
-    """
-    s_tokens = [token for line in source for token in line.split()]
+def target_transcript(filepath: str) -> tuple[list[list[str]], list[str]]:
+    transcript = json.load(open(filepath))
+    utterances, speakers = [], []
 
+    for utterance in transcript:
+        t = utterance['text'].split()
+        speakers.append(utterance['sid'])
+        # utterances.append([DEFAULT_SPEAKER_ID, t])  # TODO: after updated
+        utterances.append([DEFAULT_SPEAKER, ' '.join(t)])
+
+    return utterances, speakers
+
+
+def align4d_to_whisper(w_tokens: list[str], a_tokens: list[str]) -> dict[int, int]:
+    maps, idx = dict(), 0
+    for w_idx, w_token in enumerate(w_tokens):
+        for a_idx in range(idx, len(a_tokens)):
+            if w_token == a_tokens[a_idx]:
+                maps[a_idx] = w_idx
+                idx = a_idx + 1
+                break
+    return maps
+
+
+def target_to_align4d(t_utterances: list[list[str]], a_tokens: list[str]) -> list[list[int]]:
+    maps, idx = [], 0
+    for utterance in t_utterances:
+        indices = []
+        for token in utterance:
+            for i in range(idx, len(a_tokens)):
+                if token == a_tokens[i]:
+                    indices.append(i)
+                    idx = i + 1
+                    break
+            else:
+                indices.append(-1)
+        maps.append(indices)
+    return maps
+
+
+def target_to_whisper(w_tokens: list[str], w_sids: list[int], t_speakers: list[str], t2a: list[list[int]], a2w: dict[int, int]) -> list[list[str]]:
+    t2w, idx = [], 0
+
+    for t_idx, t_indices in enumerate(t2a):
+        sid = t_speakers[t_idx]
+        fst = next((i for i in t_indices if i >= 0 and i in a2w), -1)
+        if fst == -1:
+            t2w.append([sid, None])
+            continue
+        lst = next(i for i in reversed(t_indices) if i >= 0 and i in a2w)
+        fst, lst = a2w[fst], a2w[lst] + 1
+        if fst > idx:
+            t2w.append(['', (idx, fst)])
+        t2w.append([sid, (fst, lst)])
+        idx = lst
+
+    while True:
+        for i, curr in enumerate(t2w):
+            if i == 0: continue
+            prev = t2w[i - 1]
+            if curr is None or prev is None or curr[1] is None or prev[1] is None: continue
+            c_sid, (c_fst, c_lst) = curr[0], curr[1]
+            p_sid, (p_fst, p_lst) = prev[0], prev[1]
+
+            if w_sids[p_lst - 1] == w_sids[c_fst]:
+                sid = w_sids[c_fst]
+                # merge unmatched tokens to the next utterance
+                if not p_sid and c_sid:
+                    fst = p_fst
+                    for j in range(p_lst - 2, p_fst - 1, -1):
+                        if w_sids[j] != sid:
+                            fst = j + 1
+                            break
+                    curr[1] = (fst, c_lst)
+                    t2w[i - 1] = None
+                # merge unmatched tokens to the previous utterance
+                elif not c_sid and p_sid:
+                    lst = c_lst
+                    for j in range(c_fst + 1, c_lst):
+                        if w_sids[j] != sid:
+                            lst = j
+                            break
+                    prev[1] = (p_fst, lst)
+                    t2w[i] = None
+
+                # print('=======================================================')
+                # print(' '.join(w_tokens[p_fst:p_lst]))
+                # print(' '.join(w_tokens[c_fst:c_lst]))
+
+        p_len = len(t2w)
+        t2w = [t for t in t2w if t is not None]
+        print(p_len, len(t2w))
+        if p_len == len(t2w): break
+
+    for curr in t2w:
+        t = curr[1]
+        curr[1] = '' if t is None else ' '.join(w_tokens[t[0]:t[1]])
+
+    return t2w
+
+
+def fuse(whisper_input: str, target_input: str, fuse_output: str, tokenizer: EnglishTokenizer, align_output: Optional[str] = None, xprint: bool = False):
+    w_tokens, w_sids = whisper_transcript(whisper_input, tokenizer)
+    t_utterances, t_speakers = target_transcript(target_input)
+
+    if align_output and os.path.exists(align_output):
+        a_output = json.load(open(align_output))
+    else:
+        a_output = align.align(w_tokens, t_utterances)
+        if align_output:
+            json.dump(a_output, open(align_output, 'w'))
+
+    t_utterances = [u[1].split() for u in t_utterances]  # TODO: drop .split() after updated
+    t2a = target_to_align4d(t_utterances, a_output['reference'][DEFAULT_SPEAKER])
+    a2w = align4d_to_whisper(w_tokens, a_output['hypothesis'])
+    t2w = target_to_whisper(w_tokens, w_sids, t_speakers, t2a, a2w)
+    json.dump(t2w, open(fuse_output, 'w'), indent=2)
+    if xprint: compare(t2w, t_utterances)
+
+
+def compare(t2w: list[list[str]], t_utterances: list[list[str]]):
+    all, idx, empty, nosid = [], 0, 0, 0
+
+    for sid, utterance in t2w:
+        if sid:
+            all.append('{}: {}'.format(sid, utterance))
+            all.append('<- {}'.format(' '.join(t_utterances[idx])))
+            if not utterance: empty += 1
+            idx += 1
+        else:
+            all.append('({})'.format(utterance))
+            nosid += 1
+
+    fout = open('resources/xprint_2.txt', 'w')
+    fout.write('\n'.join(all))
+    fout.write('\n\nNo Match: {}, No Speaker: {}\n'.format(empty, nosid))
 
 
 if __name__ == '__main__':
-    fuse()
+    tokenizer = EnglishTokenizer()
+    whisper_input = 'resources/whisper.json'
+    target_input = 'resources/azure.json'
+    fuse_output = 'resources/fuse.json'
+    align_output = 'resources/align.json'
+    fuse(whisper_input, target_input, fuse_output, tokenizer, align_output, True)
